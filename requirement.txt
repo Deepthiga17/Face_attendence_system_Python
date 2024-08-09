@@ -1,0 +1,8 @@
+opencv-python
+firebase-admin
+face_recognition
+cvzone
+pickle
+numpy
+PyQt5
+twilio
