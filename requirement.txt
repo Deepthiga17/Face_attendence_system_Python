@@ -1,8 +1,5 @@
 opencv-python
 firebase-admin
-face_recognition
+mediapipe
 cvzone
-pickle
 numpy
-PyQt5
-twilio

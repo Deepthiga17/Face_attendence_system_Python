@@ -2,36 +2,24 @@ import os
 import pickle
 import numpy as np
 import cv2
-import face_recognition
 import cvzone
+import mediapipe as mp
 import firebase_admin
 from firebase_admin import credentials, db, storage
 from datetime import datetime
-from twilio.rest import Client
 
 # Initialize Firebase
 cred = credentials.Certificate("serviceAccountKey.json")
 firebase_admin.initialize_app(cred, {
-    'databaseURL': "https://console.firebase.google.com/u/1/project/face-attendance-project-af54f/database/face-attendance-project-af54f-default-rtdb/data/~2F",
+    'databaseURL': "https://face-attendance-project-af54f-default-rtdb.asia-southeast1.firebasedatabase.app/",
     'storageBucket': "gs://face-attendance-project-af54f.appspot.com"
 })
 
 bucket = storage.bucket()
 
-# Twilio setup
-account_sid = 'your_account_sid'
-auth_token = 'your_auth_token'
-twilio_phone_number = 'your_twilio_phone_number'
-client = Client(account_sid, auth_token)
-
-# Function to send SMS notification
-def send_sms(phone_number, student_name, department):
-    message = client.messages.create(
-        body=f'{student_name} from {department} has been marked present today.',
-        from_=twilio_phone_number,
-        to=phone_number
-    )
-    print(f'SMS sent to {phone_number}: {message.sid}')
+# Initialize MediaPipe Face Mesh
+mp_face_mesh = mp.solutions.face_mesh
+face_mesh = mp_face_mesh.FaceMesh(static_image_mode=False, max_num_faces=1, min_detection_confidence=0.5)
 
 # Initialize video capture
 cap = cv2.VideoCapture(0)  # Change to 1 if necessary
@@ -56,30 +44,35 @@ counter = 0
 id = -1
 imgStudent = []
 
+# Function to calculate face landmark similarity
+def find_landmark_similarity(landmarks1, landmarks2):
+    return np.linalg.norm(landmarks1 - landmarks2)
+
 while True:
     success, img = cap.read()
     if not success:
         break
 
-    imgS = cv2.resize(img, (0, 0), None, 0.25, 0.25)
-    imgS = cv2.cvtColor(imgS, cv2.COLOR_BGR2RGB)
-
-    faceCurFrame = face_recognition.face_locations(imgS)
-    encodeCurFrame = face_recognition.face_encodings(imgS, faceCurFrame)
+    imgRGB = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    results = face_mesh.process(imgRGB)
 
     imgBackground[162:162 + 480, 55:55 + 640] = img
     imgBackground[44:44 + 633, 808:808 + 414] = imgModeList[modeType]
 
-    if faceCurFrame:
-        for encodeFace, faceLoc in zip(encodeCurFrame, faceCurFrame):
-            matches = face_recognition.compare_faces(encodeListKnown, encodeFace)
-            faceDis = face_recognition.face_distance(encodeListKnown, encodeFace)
-            matchIndex = np.argmin(faceDis)
+    if results.multi_face_landmarks:
+        for face_landmarks in results.multi_face_landmarks:
+            landmarks = np.array([(lm.x, lm.y, lm.z) for lm in face_landmarks.landmark])
 
-            if matches[matchIndex]:
-                y1, x2, y2, x1 = [v * 4 for v in faceLoc]
-                bbox = 55 + x1, 162 + y1, x2 - x1, y2 - y1
-                imgBackground = cvzone.cornerRect(imgBackground, bbox, rt=0)
+            min_distance = float('inf')
+            matchIndex = -1
+
+            for idx, known_landmarks in enumerate(encodeListKnown):
+                distance = find_landmark_similarity(landmarks, known_landmarks)
+                if distance < min_distance:
+                    min_distance = distance
+                    matchIndex = idx
+
+            if min_distance < 0.6:  # You can adjust this threshold
                 id = studentIds[matchIndex]
 
                 if counter == 0:
@@ -121,14 +114,6 @@ while True:
                     ref.update({
                         'last_attendance_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     })
-                    # Send SMS notification
-                    phone_number = studentInfo.get('phone_number')  # Fetch phone number from student info
-                    if phone_number:
-                        send_sms(phone_number, studentInfo['name'], studentInfo['department'])
-                else:
-                    modeType = 3
-                    counter = 0
-                    imgBackground[44:44 + 633, 808:808 + 414] = imgModeList[modeType]
 
             if modeType != 3:
                 if 10 < counter < 20:
@@ -137,14 +122,15 @@ while True:
                 imgBackground[44:44 + 633, 808:808 + 414] = imgModeList[modeType]
 
                 if counter <= 10:
-                    cv2.putText(imgBackground, str(studentInfo['total_attendance']), (861, 125),
+                    # Display only relevant information
+                    cv2.putText(imgBackground, f'ID: {id}', (861, 125),
                                 cv2.FONT_HERSHEY_COMPLEX, 1, (255, 255, 255), 1)
-                    cv2.putText(imgBackground, str(studentInfo['department']), (1006, 550),
-                                cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 255, 255), 1)
-                    cv2.putText(imgBackground, str(id), (1006, 493),
-                                cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 255, 255), 1)
-                    cv2.putText(imgBackground, str(studentInfo['starting_year']), (910, 625),
-                                cv2.FONT_HERSHEY_COMPLEX, 0.6, (100, 100, 100), 1)
+                    cv2.putText(imgBackground, f'Department: {studentInfo["department"]}', (861, 175),
+                                cv2.FONT_HERSHEY_COMPLEX, 1, (255, 255, 255), 1)
+                    cv2.putText(imgBackground, f'Starting Year: {studentInfo["starting_year"]}', (861, 225),
+                                cv2.FONT_HERSHEY_COMPLEX, 1, (255, 255, 255), 1)
+                    cv2.putText(imgBackground, f'Total Attendance: {studentInfo["total_attendance"]}', (861, 275),
+                                cv2.FONT_HERSHEY_COMPLEX, 1, (255, 255, 255), 1)
 
                     (w, h), _ = cv2.getTextSize(studentInfo['name'], cv2.FONT_HERSHEY_COMPLEX, 1, 1)
                     offset = (414 - w) // 2

@@ -1,52 +1,56 @@
 import cv2
-import face_recognition
-import pickle
 import os
-import firebase_admin
-from firebase_admin import credentials
-from firebase_admin import db
-from firebase_admin import  storage
-# note that all image need to be in the size of 216*216 pixel if u want to convert perform it in canva.
-cred = credentials.Certificate("serviceAccountKey.json")
-firebase_admin.initialize_app(cred, {
-    'databaseURL': "https://console.firebase.google.com/u/1/project/face-attendance-project-af54f/database/face-attendance-project-af54f-default-rtdb/data/~2F",
-    'storageBucket': "gs://face-attendance-project-af54f.appspot.com"
-})
+import pickle
+import mediapipe as mp
+import numpy as np
 
+# Initialize MediaPipe Face Mesh
+mp_face_mesh = mp.solutions.face_mesh
+face_mesh = mp_face_mesh.FaceMesh(static_image_mode=True, max_num_faces=1, min_detection_confidence=0.5)
+
+def find_encodings(imagesList):
+    encodeList = []
+    for img in imagesList:
+        imgRGB = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        results = face_mesh.process(imgRGB)
+
+        if results.multi_face_landmarks:
+            for face_landmarks in results.multi_face_landmarks:
+                encodeList.append(np.array([(lm.x, lm.y, lm.z) for lm in face_landmarks.landmark]))
+        else:
+            print("No face landmarks detected in an image.")
+    return encodeList
 
 # Importing student images
 folderPath = 'Images'
 pathList = os.listdir(folderPath)
-print(pathList)
+print("Image Paths:", pathList)
 imgList = []
 studentIds = []
+
 for path in pathList:
-    imgList.append(cv2.imread(os.path.join(folderPath, path)))
-    studentIds.append(os.path.splitext(path)[0])
+    try:
+        img = cv2.imread(os.path.join(folderPath, path))
+        
+        if img is None:
+            print(f"Failed to load image: {path}")
+            continue
 
-    fileName = f'{folderPath}/{path}'
-    bucket = storage.bucket()
-    blob = bucket.blob(fileName)
-    blob.upload_from_filename(fileName)
-print(studentIds)
+        imgList.append(img)
+        studentIds.append(os.path.splitext(path)[0])
 
+    except Exception as e:
+        print(f"Error processing {path}: {e}")
 
-def findEncodings(imagesList):
-    encodeList = []
-    for img in imagesList:
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        encode = face_recognition.face_encodings(img)[0]
-        encodeList.append(encode)
-
-    return encodeList
-
+print("Student IDs:", studentIds)
 
 print("Encoding Started ...")
-encodeListKnown = findEncodings(imgList)
+encodeListKnown = find_encodings(imgList)
 encodeListKnownWithIds = [encodeListKnown, studentIds]
 print("Encoding Complete")
 
-file = open("EncodeFile.p", 'wb')
-pickle.dump(encodeListKnownWithIds, file)
-file.close()
+# Save the encodings to a file
+with open("EncodeFile.p", 'wb') as file:
+    pickle.dump(encodeListKnownWithIds, file)
+
 print("File Saved")
